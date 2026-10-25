@@ -50,11 +50,25 @@ input[type=text]:focus{border-color:var(--acc)}
 <body>
 <div id="root"></div>
 <input type="file" id="file" accept="image/*" hidden>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore-compat.js"></script>
 <script>
+const firebaseConfig = {
+  apiKey: "AIzaSyA0_OPkKTUNUKSsjEncN3n_59aV7U7MwaEG4",
+  authDomain: "nud-messenger.firebaseapp.com",
+  projectId: "nud-messenger",
+  storageBucket: "nud-messenger.firebasestorage.app",
+  messagingSenderId: "344910242329",
+  appId: "1:344910242329:web:e0084c8219b90aaf2ec088",
+  measurementId: "G-PN5Y8BC1QP"
+};
+firebase.initializeApp(firebaseConfig);
+const auth=firebase.auth(), db=firebase.firestore();
 const $=s=>document.querySelector(s), root=$("#root");
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const colors=["#6c5ce7","#e17055","#00b894","#0984e3","#d63031","#e84393","#fdcb6e","#00cec9"];
-let db,user,uid,me=null,users={},chats=[],cur=null,unsubM=null,msgs=[],q="",regPhoto=null,editPhoto=null,ready=false,subbed=false,modal=false,pickTarget=null;
+let uid=null,me=null,users={},chats=[],cur=null,peerName=null,unsubM=null,unsubChats=null,unsubUsers=null,msgs=[],q="",regPhoto=null,editPhoto=null,modal=false,authMode="register",busy=false;
 const cid=(a,b)=>[a,b].sort().join("__");
 function av(u,cls=""){
   if(u&&u.photo)return `<img class="av ${cls}" src="${esc(u.photo)}" alt="">`;
@@ -62,101 +76,127 @@ function av(u,cls=""){
   return `<div class="av ${cls}" style="background:${colors[h]}">${esc(n[0].toUpperCase())}</div>`;
 }
 const time=t=>new Date(t).toLocaleTimeString("ru",{hour:"2-digit",minute:"2-digit"});
-function resize(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const s=160,c=document.createElement("canvas");c.width=c.height=s;const x=c.getContext("2d"),m=Math.min(im.width,im.height);x.drawImage(im,(im.width-m)/2,(im.height-m)/2,m,m,0,0,s,s);res(c.toDataURL("image/jpeg",.8))};im.onerror=rej;im.src=r.result};r.onerror=rej;r.readAsDataURL(file)})}
-$("#file").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;const d=await resize(f);if(pickTarget==="reg")regPhoto=d;else editPhoto=d;
-  const el=document.querySelector("[data-pick] .av");if(el){el.outerHTML=`<img class="av big" src="${d}" alt="">`}};
-function pickPhoto(t){pickTarget=t;$("#file").click()}
-
-async function init(){
-  db=await claude.use("db");user=await claude.use("user");
-  if(!db||!user){root.innerHTML='<div class="empty">Nud работает только для вошедших пользователей Claude.</div>';return}
-  uid=await user.id();
-  db.collection("users").onSnapshot(s=>{users={};s.docs.forEach(d=>users[d.id]=d.data());me=Object.values(users).find(u=>u.uid===uid)||null;ready=true;
-    if(me&&!subbed){subbed=true;db.collection("chats").where("members","array-contains",me.username).onSnapshot(c=>{chats=c.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>b.ts-a.ts);if(!modal)render()})}
-    if(!modal)render()},e=>{root.innerHTML='<div class="empty">Нет доступа к данным</div>'});
-}
-function render(){
-  if(!ready)return;
-  if(!me)return renderAuth();
-  const active=document.activeElement&&document.activeElement.id,val=active?document.activeElement.value:"";
-  const peer=cur?cur.split("__").find(x=>x!==me.username):null,pu=peer?users[peer]:null;
-  let list="";
-  if(q.trim()){
-    const k=q.trim().toLowerCase().replace(/^@/,"");
-    const f=Object.values(users).filter(u=>u.username!==me.username&&(u.username.includes(k)||(u.name||"").toLowerCase().includes(k)));
-    list=`<div class="lbl">Пользователи</div>`+(f.map(u=>row(u,"@"+u.username,cid(me.username,u.username))).join("")||`<div class="empty">Никого не найдено</div>`);
-  }else{
-    list=chats.map(c=>{const p=c.members.find(x=>x!==me.username),u=users[p]||{username:p,name:p};return row(u,c.last||"",c.id)}).join("")||`<div class="empty">Чатов пока нет.<br>Найдите друга по @username выше.</div>`;
-  }
-  root.innerHTML=`<div class="app ${cur?"chat":""}">
-  <div class="side"><div class="head"><span class="logo">Nud</span><div class="me" data-act="profile">${av(me,"sm")}</div></div>
-  <div class="search"><input type="text" id="q" placeholder="Поиск по @username" value="${esc(q)}"></div>
-  <div class="list">${list}</div></div>
-  <div class="main">${cur?`<div class="top"><button class="back" data-act="back">←</button>${av(pu,"sm")}<div><b>${esc(pu?pu.name:peer)}</b><small style="display:block;color:var(--mute)">@${esc(peer)}</small></div></div>
-  <div class="msgs" id="msgs"></div>
-  <div class="compose"><input type="text" id="msg" placeholder="Сообщение" autocomplete="off"><button class="btn" data-act="send">➤</button></div>`:`<div class="empty">Выберите чат или найдите человека по @username</div>`}</div></div>`;
-  fillMsgs();
-  if(active){const el=document.getElementById(active);if(el){el.focus();if(el.type==="text")el.setSelectionRange(val.length,val.length)}}
-}
-const row=(u,sub,id)=>`<div class="row ${cur===id?"on":""}" data-chat="${esc(id)}">${av(u)}<div class="t"><b>${esc(u.name||u.username)}</b><small>${esc(sub)}</small></div></div>`;
-function fillMsgs(){
-  const el=document.getElementById("msgs");if(!el)return;
-  el.innerHTML=msgs.length?msgs.map(m=>`<div class="m ${m.from===me.username?"me":""}">${esc(m.text)}<i>${time(m.ts)}</i></div>`).join(""):`<div class="empty">Напишите первое сообщение</div>`;
-  el.scrollTop=el.scrollHeight;
-}
-function openChat(id){
-  cur=id;msgs=[];if(unsubM)unsubM();
-  unsubM=db.collection("chats/"+id+"/msgs").orderBy("ts").limit(300).onSnapshot(s=>{msgs=s.docs.map(d=>d.data());fillMsgs()});
-  render();setTimeout(()=>document.getElementById("msg")?.focus(),50);
-}
-async function send(){
-  const el=document.getElementById("msg"),t=el.value.trim();if(!t||!cur)return;el.value="";
-  const ts=Date.now();
-  try{
-    await db.doc("chats/"+cur).set({members:cur.split("__"),last:t.slice(0,60),ts});
-    await db.collection("chats/"+cur+"/msgs").add({from:me.username,text:t.slice(0,2000),ts});
-  }catch(e){el.value=t}
+function resize(file){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>{const im=new Image();im.onload=()=>{const s=160,c=document.createElement("canvas");c.width=c.height=s;const x=c.getContext("2d"),m=Math.min(im.width,im.height);x.drawImage(im,(im.width-m)/2,(im.height-m)/2,m,m,0,0,s,s);res(c.toDataURL("image/jpeg",.75))};im.onerror=rej;im.src=r.result};r.onerror=rej;r.readAsDataURL(file)})}
+$("#file").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f)return;try{const d=await resize(f);if(authMode==="register")regPhoto=d;else editPhoto=d;const el=document.querySelector("[data-pick] .av");if(el)el.outerHTML=`<img class="av ${authMode==="register"?"big": "big"}" src="${d}" alt="">`}catch(_){setErr("Не удалось открыть изображение")}};
+function pickPhoto(t){authMode=t==="reg"?"register":authMode;$("#file").click()}
+function setErr(t){const e=$("#err");if(e)e.textContent=t}
+function niceError(e){
+ const c=e&&e.code||"";
+ if(c.includes("email-already-in-use"))return "Эта почта уже зарегистрирована. Войдите в аккаунт.";
+ if(c.includes("invalid-email"))return "Проверьте адрес электронной почты.";
+ if(c.includes("weak-password"))return "Пароль должен содержать не менее 6 символов.";
+ if(c.includes("wrong-password")||c.includes("invalid-credential"))return "Неверная почта или пароль.";
+ if(c.includes("user-not-found"))return "Аккаунт с такой почтой не найден.";
+ if(c.includes("too-many-requests"))return "Слишком много попыток. Попробуйте позже.";
+ if(c.includes("network-request-failed"))return "Проверьте подключение к интернету.";
+ if(c.includes("permission-denied"))return "Нет доступа к базе. Нужно настроить правила Firestore.";
+ return "Ошибка: "+(e&&e.message?e.message:"попробуйте ещё раз");
 }
 function renderAuth(){
-  root.innerHTML=`<div class="auth"><div class="card"><h1 class="logo">Nud</h1><p>Мини-мессенджер. Создайте профиль, чтобы начать общаться.</p>
-  <div class="pick" data-pick="reg">${av({name:"+"},"big")}<span>+</span></div>
-  <input type="text" id="un" placeholder="username (a–z, 0–9, _)" maxlength="20" autocapitalize="off" autocomplete="off">
-  <input type="text" id="nm" placeholder="Имя" maxlength="30">
-  <div class="err" id="err"></div><button class="btn" data-act="reg">Зарегистрироваться</button></div></div>`;
-  if(regPhoto)document.querySelector("[data-pick] .av").outerHTML=`<img class="av big" src="${regPhoto}" alt="">`;
+ root.innerHTML=`<div class="auth"><div class="card"><h1 class="logo">Nud</h1><p>${authMode==="register"?"Создайте профиль, чтобы начать общаться.":"Войдите, чтобы продолжить общение."}</p>
+ ${authMode==="register"?`<div class="pick" data-pick="reg">${av({name:"+"},"big")}<span>+</span></div><input type="text" id="un" placeholder="username (a–z, 0–9, _)" maxlength="20" autocapitalize="off" autocomplete="username"><input type="text" id="nm" placeholder="Имя" maxlength="30">`:""}
+ <input type="email" id="email" placeholder="Электронная почта" autocomplete="email" inputmode="email">
+ <input type="password" id="password" placeholder="Пароль (не менее 6 символов)" autocomplete="${authMode==="register"?"new-password":"current-password"}">
+ <div class="err" id="err"></div><button class="btn" data-act="auth" ${busy?"disabled":""}>${busy?"Подождите…":authMode==="register"?"Зарегистрироваться":"Войти"}</button>
+ <button class="btn ghost" data-act="toggle-auth">${authMode==="register"?"Уже есть аккаунт? Войти":"Нет аккаунта? Зарегистрироваться"}</button></div></div>`;
+ if(regPhoto&&authMode==="register"){const el=document.querySelector("[data-pick] .av");if(el)el.outerHTML=`<img class="av big" src="${regPhoto}" alt="">`}
 }
 async function register(){
-  const un=$("#un").value.trim().toLowerCase(),nm=$("#nm").value.trim(),err=$("#err");
-  if(!/^[a-z0-9_]{3,20}$/.test(un))return err.textContent="Username: 3–20 символов, a–z, 0–9, _";
-  if(!nm)return err.textContent="Введите имя";
-  try{
-    const ex=await db.doc("users/"+un).get();if(ex.exists)return err.textContent="Этот username уже занят";
-    await db.doc("users/"+un).set({uid,username:un,name:nm,photo:regPhoto||"",created:Date.now()});
-  }catch(e){err.textContent="Не удалось зарегистрироваться"}
+ const email=$("#email").value.trim(),password=$("#password").value,un=$("#un").value.trim().toLowerCase(),nm=$("#nm").value.trim();
+ if(!/^[a-z0-9_]{3,20}$/.test(un))return setErr("Username: 3–20 символов, a–z, 0–9, _");
+ if(!nm)return setErr("Введите имя");
+ if(!email)return setErr("Введите электронную почту");
+ if(password.length<6)return setErr("Пароль должен содержать не менее 6 символов");
+ busy=true;renderAuth();
+ try{
+   const exists=await db.collection("users").doc(un).get();
+   if(exists.exists){busy=false;renderAuth();return setErr("Этот username уже занят")}
+   const cred=await auth.createUserWithEmailAndPassword(email,password);
+   uid=cred.user.uid;
+   await db.collection("users").doc(un).set({uid,username:un,name:nm,photo:regPhoto||"",created:Date.now()});
+ }catch(e){busy=false;renderAuth();setErr(niceError(e))}
+}
+async function login(){
+ const email=$("#email").value.trim(),password=$("#password").value;
+ if(!email||!password)return setErr("Введите почту и пароль");
+ busy=true;renderAuth();
+ try{await auth.signInWithEmailAndPassword(email,password)}catch(e){busy=false;renderAuth();setErr(niceError(e))}
+}
+async function authAction(){if(authMode==="register")await register();else await login()}
+async function startApp(user){
+ uid=user.uid;
+ try{
+   const snap=await db.collection("users").where("uid","==",uid).limit(1).get();
+   if(snap.empty){me=null;authMode="register";renderAuth();setErr("Аккаунт вошёл, но профиль Nud не найден. Выйдите и зарегистрируйтесь заново.");return}
+   me={...snap.docs[0].data(),id:snap.docs[0].id};
+   if(unsubUsers)unsubUsers();if(unsubChats)unsubChats();
+   unsubUsers=db.collection("users").onSnapshot(s=>{users={};s.docs.forEach(d=>users[d.id]={...d.data(),id:d.id});me=users[me.username]||me;if(!modal)render()},e=>{root.innerHTML=`<div class="empty">${esc(niceError(e))}</div>`});
+   unsubChats=db.collection("chats").where("memberUids","array-contains",uid).onSnapshot(s=>{
+     chats=s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.ts||0)-(a.ts||0));
+     if(!modal)render();
+   },e=>{if(!modal){const el=$("#err");if(el)el.textContent=niceError(e)}});
+ }catch(e){root.innerHTML=`<div class="empty">${esc(niceError(e))}<br><button class="btn" onclick="auth.signOut()">Выйти</button></div>`}
+}
+function render(){
+ if(!me)return;
+ const active=document.activeElement&&document.activeElement.id,val=active?document.activeElement.value:"";
+ const peer=cur?cur.split("__").find(x=>x!==me.username):null,pu=peer?users[peer]:null;
+ let list="";
+ if(q.trim()){
+   const k=q.trim().toLowerCase().replace(/^@/,"");
+   const f=Object.values(users).filter(u=>u.username!==me.username&&((u.username||"").includes(k)||((u.name||"").toLowerCase().includes(k))));
+   list=`<div class="lbl">Пользователи</div>`+(f.map(u=>row(u,"@"+u.username,cid(me.username,u.username))).join("")||`<div class="empty">Никого не найдено</div>`);
+ }else{
+   list=chats.map(c=>{const p=(c.members||[]).find(x=>x!==me.username),u=users[p]||{username:p||"Пользователь",name:p||"Пользователь"};return row(u,c.last||"",c.id)}).join("")||`<div class="empty">Чатов пока нет.<br>Найдите друга по @username выше.</div>`;
+ }
+ root.innerHTML=`<div class="app ${cur?"chat":""}">
+ <div class="side"><div class="head"><span class="logo">Nud</span><div class="me" data-act="profile">${av(me,"sm")}</div><button class="btn ghost" data-act="logout" style="padding:7px 9px">Выйти</button></div>
+ <div class="search"><input type="text" id="q" placeholder="Поиск по @username" value="${esc(q)}"></div><div class="list">${list}</div></div>
+ <div class="main">${cur?`<div class="top"><button class="back" data-act="back">←</button>${av(pu,"sm")}<div><b>${esc(pu?pu.name:peer)}</b><small style="display:block;color:var(--mute)">@${esc(peer)}</small></div></div><div class="msgs" id="msgs"></div><div class="compose"><input type="text" id="msg" placeholder="Сообщение" autocomplete="off"><button class="btn" data-act="send">➤</button></div>`:`<div class="empty">Выберите чат или найдите человека по @username</div>`}</div></div>`;
+ fillMsgs();
+ if(active){const el=document.getElementById(active);if(el){el.focus();if(el.type==="text")el.setSelectionRange(val.length,val.length)}}
+}
+const row=(u,sub,id)=>`<div class="row ${cur===id?"on":""}" data-chat="${esc(id)}">${av(u)}<div class="t"><b>${esc(u.name||u.username)}</b><small>${esc(sub)}</small></div></div>`;
+function fillMsgs(){const el=$("#msgs");if(!el)return;el.innerHTML=msgs.length?msgs.map(m=>`<div class="m ${m.from===uid?"me":""}">${esc(m.text)}<i>${time(m.ts)}</i></div>`).join(""):`<div class="empty">Напишите первое сообщение</div>`;el.scrollTop=el.scrollHeight}
+function openChat(id){
+ cur=id;msgs=[];peerName=id.split("__").find(x=>x!==me.username);if(unsubM)unsubM();
+ unsubM=db.collection("chats").doc(id).collection("msgs").orderBy("ts").limit(300).onSnapshot(s=>{msgs=s.docs.map(d=>d.data());fillMsgs()},e=>{msgs=[];fillMsgs();console.warn(e)});
+ render();setTimeout(()=>$("#msg")?.focus(),50);
+}
+async function send(){
+ const el=$("#msg"),t=el&&el.value.trim();if(!t||!cur)return;el.value="";
+ const peer=cur.split("__").find(x=>x!==me.username),pu=users[peer];if(!pu){el.value=t;return}
+ const chatRef=db.collection("chats").doc(cur),ts=Date.now();
+ try{
+   await chatRef.set({members:[me.username,peer].sort(),memberUids:[uid,pu.uid].sort(),last:t.slice(0,60),ts},{merge:true});
+   await chatRef.collection("msgs").add({from:uid,fromUsername:me.username,text:t.slice(0,2000),ts});
+ }catch(e){el.value=t;alert(niceError(e))}
 }
 function profile(){
-  modal=true;editPhoto=null;
-  const d=document.createElement("div");d.className="modal";
-  d.innerHTML=`<div class="card"><div class="pick" data-pick="edit">${av(me,"big")}<span>✎</span></div><p>@${esc(me.username)}</p>
-  <input type="text" id="enm" value="${esc(me.name)}" maxlength="30"><button class="btn" data-act="save">Сохранить</button><button class="btn ghost" data-act="close">Закрыть</button></div>`;
-  document.body.appendChild(d);
+ modal=true;editPhoto=null;
+ const d=document.createElement("div");d.className="modal";
+ d.innerHTML=`<div class="card"><div class="pick" data-pick="edit">${av(me,"big")}<span>✎</span></div><p>@${esc(me.username)}</p><input type="text" id="enm" value="${esc(me.name)}" maxlength="30"><button class="btn" data-act="save">Сохранить</button><button class="btn ghost" data-act="close">Закрыть</button></div>`;
+ document.body.appendChild(d);
 }
 function closeModal(){document.querySelector(".modal")?.remove();modal=false;render()}
 document.addEventListener("click",async e=>{
-  const p=e.target.closest("[data-pick]");if(p)return pickPhoto(p.dataset.pick);
-  const c=e.target.closest("[data-chat]");if(c){q="";return openChat(c.dataset.chat)}
-  const a=e.target.closest("[data-act]");if(!a)return;
-  const k=a.dataset.act;
-  if(k==="reg")register();
-  else if(k==="send")send();
-  else if(k==="back"){cur=null;if(unsubM)unsubM();msgs=[];render()}
-  else if(k==="profile")profile();
-  else if(k==="close")closeModal();
-  else if(k==="save"){const n=$("#enm").value.trim()||me.name,u={name:n};if(editPhoto)u.photo=editPhoto;try{await db.doc("users/"+me.username).update(u)}catch(_){}closeModal()}
+ const p=e.target.closest("[data-pick]");if(p){if(p.dataset.pick==="edit")authMode="edit";else authMode="register";return pickPhoto(p.dataset.pick)}
+ const c=e.target.closest("[data-chat]");if(c){q="";return openChat(c.dataset.chat)}
+ const a=e.target.closest("[data-act]");if(!a)return;
+ const k=a.dataset.act;
+ if(k==="auth")authAction();
+ else if(k==="toggle-auth"){authMode=authMode==="register"?"login":"register";renderAuth()}
+ else if(k==="reg")register();
+ else if(k==="send")send();
+ else if(k==="back"){cur=null;if(unsubM)unsubM();msgs=[];render()}
+ else if(k==="profile")profile();
+ else if(k==="close")closeModal();
+ else if(k==="logout"){if(unsubM)unsubM();if(unsubUsers)unsubUsers();if(unsubChats)unsubChats();cur=null;me=null;q="";await auth.signOut()}
+ else if(k==="save"){const n=$("#enm").value.trim()||me.name,u={name:n};if(editPhoto)u.photo=editPhoto;try{await db.collection("users").doc(me.username).update(u);me={...me,...u}}catch(e){alert(niceError(e))}closeModal()}
 });
 document.addEventListener("input",e=>{if(e.target.id==="q"){q=e.target.value;render()}});
-document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.id==="msg")send();if(e.key==="Enter"&&(e.target.id==="un"||e.target.id==="nm"))register()});
-init();
+document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.id==="msg")send();if(e.key==="Enter"&&(e.target.id==="un"||e.target.id==="nm"||e.target.id==="email"||e.target.id==="password")){if(e.target.id==="password")authAction();else if(e.target.id==="nm")authAction()}});
+auth.onAuthStateChanged(user=>{if(user)startApp(user);else{uid=null;me=null;users={};chats=[];renderAuth()}});
 </script>
 </body>
 </html>
